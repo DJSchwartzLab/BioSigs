@@ -1,0 +1,116 @@
+#Code to replicate Figure 1 results
+#updated Friday, August 23rd, 2024
+
+#setup----
+
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(ggridges)
+
+#set working directory
+setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
+
+#participant metadata
+p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx', sheet = 'Participant metadata')
+row.names(p.meta) <- p.meta$Sample
+samples <- row.names(p.meta)
+
+#isolate metadata
+i.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx', sheet = "Isolate metadata") %>% 
+  merge(select(p.meta, c(Participant_ID, Sample)), by = 'Participant_ID')
+row.names(i.meta) <- i.meta$Sample_ID
+isolates <- row.names(i.meta)
+
+#isolate analysis----
+
+##mlst matches----
+
+#format isolate metadata for visualization of matches by MLST
+i.meta.viz <- i.meta
+i.meta.viz$Source <- factor(i.meta.viz$Source,
+                            levels = c('Urine', 'Blood', 'CSF'))
+i.meta.viz$Species_MALDI <- factor(i.meta.viz$Species_MALDI,
+                                   levels = rev(c('Escherichia coli',
+                                                  'Enterococcus faecalis',
+                                                  'Streptococcus agalactiae',
+                                                  'Klebsiella pneumoniae',
+                                                  'Enterobacter cloacae',
+                                                  'Proteus mirabilis')))
+i.meta.viz$ST_Match <- factor(i.meta.viz$ST_Match,
+                              levels = c('Y', 'N'))
+
+#plot
+p.iso.match <- i.meta.viz %>%
+  mutate(count = 1) %>% 
+  filter(Sample_Type == 'Extraintestinal') %>% 
+  ggplot(aes(Species_MALDI, count, fill = Source, color = Source)) +
+  geom_bar(position = 'stack', stat = 'identity', width = 0.9) +
+  facet_grid(~ST_Match) +
+  scale_fill_manual(values = c('#DDCC77', '#882255', '#44AA99')) +
+  scale_color_manual(values = c('#DDCC77', '#882255', '#44AA99')) +
+  theme_linedraw() +
+  theme(title=element_text(size=10),axis.text=element_text(size=10),
+        legend.position="right",
+        panel.grid.minor=element_line(),
+        axis.line = element_line(color = 'black'),
+        axis.title.y = element_blank(),
+        plot.margin = margin(10, 10, 30, 10),
+        aspect.ratio = 1.4)+
+  scale_y_continuous(minor_breaks = seq(0, 20, by = 5)) +
+  coord_flip()
+
+##snippy----
+
+#load snippy all vs. all output
+snp.dists <- read_excel('ExtendedData/240822_BioSigs_extended_data_file2.xlsx', sheet = 'Snippy')
+
+snp.dists <- mutate(snp.dists,
+                    group = case_when((Within_patient == "TRUE" & Same_ST == "TRUE")~
+                                        "Within-patient ST match",
+                                      (Within_patient == "TRUE" & Same_ST == "FALSE")~
+                                        "Within-patient ST mismatch",
+                                      (Within_patient == "FALSE" & Same_ST == "TRUE")~
+                                        "Between-patient ST match",
+                                      (Within_patient == "FALSE" & Same_ST == "FALSE")~
+                                        "Between-patient ST mismatch"))
+
+snp.dists$group <- factor(snp.dists$group,
+                          levels = c("Within-patient ST match",
+                                     "Within-patient ST mismatch",
+                                     "Between-patient ST match",
+                                     "Between-patient ST mismatch"))
+
+snp.dists$Species <- factor(snp.dists$Species,
+                            levels = rev(c('Escherichia coli',
+                                           'Enterococcus faecalis',
+                                           'Streptococcus agalactiae',
+                                           'Klebsiella pneumoniae',
+                                           'Enterobacter cloacae',
+                                           'Proteus mirabilis')))
+
+#artificially inflate Proteus observations for visualization of density (won't plot otherwise)
+snpdists_proteus <- filter(snp.dists,
+                           Species == "Proteus mirabilis")
+
+snp.dists.cat <- rbind(snp.dists,
+                       snpdists_proteus) %>% 
+  rbind(.,
+        snpdists_proteus)
+
+#plot
+p.snpdist <- snp.dists.cat %>%
+  ggplot(aes(x = SNP, y = Species, fill = group)) +
+  geom_density_ridges(alpha = 0.9, scale = 0.8, stat = "binline") +
+  scale_fill_manual(values = c('#332288', '#117733', '#88CCEE', '#AA4499')) +
+  scale_x_continuous(trans=scales::pseudo_log_trans(base = 10),breaks=c(0, 10, 100, 1000, 10000, 100000))+
+  theme_linedraw()+
+  geom_vline(xintercept=12,linetype=3)+
+  labs(x="Whole genome SNPs") +
+  theme(title=element_text(size=10),axis.text=element_text(size=10),
+        legend.position="right",
+        panel.grid.minor=element_line(),
+        axis.line = element_line(color = 'black'),
+        axis.title.y = element_blank(),
+        plot.margin = margin(10, 10, 30, 10),
+        aspect.ratio = 1)
