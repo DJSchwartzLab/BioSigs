@@ -1,0 +1,530 @@
+#Code to replicate Figure 4 results
+#updated Friday, August 23rd, 2024
+
+#setup----
+
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(tibble)
+library(reshape2)
+library(ggpubr)
+library(tidyr)
+library(ggbeeswarm)
+library(ggExtra)
+library(ggtree)
+library(ggtreeExtra)
+library(tableone)
+library(rstatix)
+library(phyloseq)
+
+set.seed(42)
+
+#set working directory
+setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
+
+#participant metadata
+p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Participant metadata') %>% 
+  as.data.frame()
+row.names(p.meta) <- p.meta$Sample
+samples <- row.names(p.meta)
+
+#metagenome metadata
+m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Metagenome metadata') %>% 
+  as.data.frame()
+row.names(m.meta) <- m.meta$Sample
+
+##load phyloseq object----
+
+#format raw MetaPhlAn4 output for phyloseq
+#load data frame
+m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
+                     skip = 1) %>% as.data.frame()
+row.names(m4.raw) <- m4.raw$clade_name
+m4.raw$clade_name <- NULL
+
+#filter out rows containing strain-level annotations that are new to metaphlan4
+m4.raw <- m4.raw %>% filter(!grepl('t__',rownames(.)))
+
+#take only rows that include s__ (species level annotation)
+m4.sp <- m4.raw[grepl('s__', rownames(m4.raw)), ]
+
+#create phyloseq taxa table
+spp <- data.frame(Names = rownames(m4.sp))
+spp <- data.frame(do.call('rbind', strsplit(as.character(spp$Names),'|',fixed=TRUE)))
+rownames(spp) <- rownames(m4.sp)
+colnames(spp) <- c('Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species')
+
+#remove prefixes from taxa
+spp$Domain <- gsub('k__', '', spp$Domain)
+spp$Phylum <- gsub('p__', '', spp$Phylum)
+spp$Class <- gsub('c__', '', spp$Class)
+spp$Order <- gsub('o__', '', spp$Order)
+spp$Family <- gsub('f__', '', spp$Family)
+spp$Genus <- gsub('g__', '', spp$Genus)
+spp$Species <- gsub('s__', '', spp$Species)
+
+#convert to matrix
+spp <- as.matrix(spp)
+
+#make phyloseq object
+ps <- phyloseq(otu_table(m4.sp, taxa_are_rows = TRUE),
+               sample_data(p.meta),
+               tax_table(spp))
+
+##create wide species data frame
+ps.spp <- tax_glom(ps, taxrank = 'Species')
+ps.spp.df <- psmelt(ps.spp)
+ps.spp.df.wide <- dcast(ps.spp.df, Sample ~ Species, value.var = "Abundance")
+row.names(ps.spp.df.wide) <- ps.spp.df.wide$Sample
+ps.spp.df.wide$Sample <- NULL
+
+##define e coli-colonized samples
+ecoli.col.df <- ps.spp.df %>% 
+  filter(Species == 'Escherichia_coli' & Abundance > 0)
+
+ecoli.col <- ecoli.col.df$Sample
+
+#strainGE analysis----
+
+##load output----
+
+#strainGST output
+gst.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                      sheet = 'strainGST') %>% as.data.frame()
+
+##prep data----
+
+#combine output files and metadata
+gst.meta <- gst.out %>% 
+  left_join(p.meta) %>%
+  mutate(E_coli_SBI_match = case_when((Colonized_final == 'yes' & E_coli_SBI == 'Y') ~ 'match',
+                                      (Colonized_final == 'no' & E_coli_SBI == 'Y') ~ 'non-match',
+                                      (Group == 'Control') ~ 'control')) %>%
+  mutate(count = 1) %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control')
+
+##reference strain cladogram----
+
+gst.tree <- read.tree('ExtendedData/240823_fasttree_core_genome_tree_filtered.newick')
+
+##load strain metadata
+gst.viz.data <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                           sheet = 'tree metadata') %>% as.data.frame() %>% 
+  dplyr::rename(ID = tip.label) %>% 
+  filter(ID %in% filter(gst.meta, E_coli_SBI == 'Y' | Group == 'Control')$accession) %>% 
+  dplyr::rename(phylo_group = phylogroup,
+                MLST = ST_v2,
+                strain_name = strain.name)
+
+##order ST by location in tree
+gst.viz.data$MLST <- factor(gst.viz.data$MLST,
+                            levels = c('144', '95', '73', '127', '550', '1193', '131', '69',
+                                       '349', '10', 'other'))
+
+##define colors for MLST
+st.pal <- c('#3b3932', '#67bd57', '#efd8b0', '#e33d3d', '#c47b84',
+            '#469990', '#808000', '#000075', '#800000', '#9A6324', 
+            '#aaffc3', '#dcbeff', 'NA')
+
+##prep participant-strain mapping data
+gst.viz.meta <- gst.meta %>%
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>% 
+  select(accession, Sample, Participant_ID, Group, E_coli_SBI_match) %>% 
+  dplyr::rename(ID = accession) %>% 
+  mutate(count = 1) %>% 
+  dplyr::group_by(ID, Group, E_coli_SBI_match) %>% 
+  dplyr::summarise(sum_count = sum(count))
+
+gst.viz.meta$Group <- factor(gst.viz.meta$Group,
+                             levels = c('Case', 'Control'))
+
+p.straingst.cladogram <- ggtree(gst.tree, branch.length = 'none') %<+% gst.viz.data +
+  geom_tippoint(aes(color = phylo_group)) +
+  hexpand(1) +
+  geom_fruit(data = gst.viz.meta,
+             geom = geom_tile,
+             mapping = aes(y = ID, fill = MLST),
+             width = 3,
+             color = "black",
+             pwidth = 2,
+             offset = 0.15,
+             alpha = 1
+  ) +
+  geom_fruit(data = gst.viz.meta,
+             geom = geom_bar,
+             mapping = aes(y = ID, x = sum_count, fill = Group,
+                           color = E_coli_SBI_match),
+             alpha = 0.8,
+             # color = c('black', 'white'),
+             pwidth = 0.38,
+             orientation = "y", 
+             stat = "identity",
+             offset = 0.12) +
+  scale_color_manual(values = c('pink', 
+                                'lightblue', 
+                                'lightgreen', 
+                                'beige', 
+                                'NA', 
+                                'grey', 
+                                'lavender', 
+                                'black', 'NA')) +
+  scale_fill_manual(values = c(st.pal[3:13], '#E23B0E', '#196689')) +
+  coord_flip()
+
+##compare phylogroup abundance and prevalence between groups----
+
+##get summed abundance per phylogroup per sample
+gst.relab.phylo <- gst.meta %>% 
+  group_by(Participant_ID, Sample, phylogroup, Group, E_coli_SBI, E_coli_UTI,
+           E_coli_SBI_match) %>% 
+  summarise(relab = sum(rapct))
+
+##create wide table
+gst.relab.phylo.wide <- dcast(gst.relab.phylo,
+                              Sample ~ phylogroup,
+                              value.var = 'relab')
+
+gst.relab.phylo.wide[is.na(gst.relab.phylo.wide)] <- 0
+
+##convert to long format for plotting later and combine with relevant metadata
+gst.relab.phylo.long <- melt(gst.relab.phylo.wide) %>% 
+  dplyr::rename(phylogroup = variable) %>% 
+  dplyr::rename(relab = value) %>% 
+  left_join(p.meta) %>%
+  mutate(E_coli_SBI_match = case_when((Colonized_final == 'yes' & E_coli_SBI == 'Y') ~ 'match',
+                                      (Colonized_final == 'no' & E_coli_SBI == 'Y') ~ 'non-match',
+                                      (Group == 'Control') ~ 'control'))
+
+gst.relab.phylo.long$E_coli_SBI_match <- factor(gst.relab.phylo.long$E_coli_SBI_match,
+                                                levels = c('match', 'non-match', 'control'))
+
+##get summed abundance per phylogroup per group
+gst.prev.phylo <- gst.meta %>%
+  filter(!is.na(E_coli_SBI_match)) %>% 
+  distinct(Participant_ID, Sample, phylogroup, Group, E_coli_SBI, E_coli_UTI,
+           E_coli_SBI_match, count) %>%
+  group_by(phylogroup) %>% 
+  summarise(prev = sum(count))
+
+gst.prev.phylo.long <- gst.relab.phylo.long %>% 
+  select(Sample, phylogroup, relab) %>% 
+  mutate(prevalence = if_else(relab > 0, 1, 0))
+
+gst.prev.phylo.wide <- dcast(gst.prev.phylo.long,
+                             Sample ~ phylogroup,
+                             value.var = 'prevalence') %>% 
+  left_join(p.meta) %>%
+  mutate(E_coli_SBI_match = case_when((Colonized_final == 'yes' & E_coli_SBI == 'Y') ~ 'match',
+                                      (Colonized_final == 'no' & E_coli_SBI == 'Y') ~ 'non-match',
+                                      (Group == 'Control') ~ 'control'))
+
+###create tableone----
+
+#define phylogroups
+tab1Vars <- c('A', 'B1', 'B2', 'C', 'D', 'F')
+
+gst.prev.phylo.wide[, tab1Vars] <-
+  lapply(gst.prev.phylo.wide[, tab1Vars], factor)
+
+tab1 <- CreateTableOne(vars = tab1Vars,
+                       strata = 'E_coli_SBI_match',
+                       data = gst.prev.phylo.wide)
+
+tab1Mat <- print(tab1,
+                 exact = tab1Vars)
+
+##manually add adjusted p-values to table
+p.adjust(c(0.274, 0.142, 0.104, 1, 0.381, 0.562),
+         method = 'BH')
+#adjusted p-values: 0.548 (A), 0.426 (B1), 0.426 (B2), 1 (C), 0.5715 (D), 0.6744 (F)
+
+###compare relative abundance----
+
+##wilcoxon test with p value adjusted within each phylogroup
+stat.test.phylo.a <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'A') %>% 
+  wilcox_test(relab ~ E_coli_SBI_match) %>% 
+  adjust_pvalue(method = 'BH') %>%
+  add_significance() %>%
+  add_y_position()
+
+stat.test.phylo.b1 <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'B1') %>% 
+  wilcox_test(relab ~ E_coli_SBI_match) %>% 
+  adjust_pvalue(method = 'BH') %>%
+  add_significance() %>%
+  add_y_position()
+
+stat.test.phylo.b2 <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'B2') %>% 
+  wilcox_test(relab ~ E_coli_SBI_match) %>% 
+  adjust_pvalue(method = 'BH') %>%
+  add_significance() %>%
+  add_y_position()
+
+stat.test.phylo.b2$y.position <- 2
+
+stat.test.phylo.d <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'D') %>% 
+  wilcox_test(relab ~ E_coli_SBI_match) %>% 
+  adjust_pvalue(method = 'BH') %>%
+  add_significance() %>%
+  add_y_position()
+
+
+
+p.phylo.a <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'A') %>% 
+  ggplot(aes(x = E_coli_SBI_match, y = relab)) +
+  geom_boxplot(aes(fill = E_coli_SBI),
+               alpha = 0.6,
+               outlier.alpha = 0) +
+  geom_beeswarm(cex = 0.5) +
+  scale_fill_manual(values = c('#196689', '#E23B0E')) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = c(0, 10, 50, 100),
+                     limits = c(0, 200)) +
+  # scale_y_continuous(limits = c(0, 100)) +
+  theme_linedraw() + 
+  stat_pvalue_manual(stat.test.phylo.a,
+                     label = 'p.adj', hide.ns = T, step.increase = 0.1) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(title = 'A',
+       y = 'Relative abundance (%)')
+
+p.phylo.b1 <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'B1') %>% 
+  ggplot(aes(x = E_coli_SBI_match, y = relab)) +
+  geom_boxplot(aes(fill = E_coli_SBI),
+               alpha = 0.6,
+               outlier.alpha = 0) +
+  geom_beeswarm(cex = 0.5) +
+  scale_fill_manual(values = c('#196689', '#E23B0E')) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = c(0, 10, 50, 100),
+                     limits = c(0, 200)) +
+  # scale_y_continuous(limits = c(0, 100)) +
+  theme_linedraw() + 
+  stat_pvalue_manual(stat.test.phylo.b1,
+                     label = 'p.adj', hide.ns = T, step.increase = 0.1) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(title = 'B1',
+       y = 'Relative abundance (%)')
+
+p.phylo.b2 <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'B2') %>% 
+  ggplot(aes(x = E_coli_SBI_match, y = relab)) +
+  geom_boxplot(aes(fill = E_coli_SBI),
+               alpha = 0.6,
+               outlier.alpha = 0) +
+  geom_beeswarm(cex = 0.5) +
+  scale_fill_manual(values = c('#196689', '#E23B0E')) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = c(0, 10, 50, 100),
+                     limits = c(0, 200)) +
+  # scale_y_continuous(limits = c(0, 100)) +
+  theme_linedraw() + 
+  stat_pvalue_manual(stat.test.phylo.b2,
+                     label = 'p.adj', hide.ns = T, step.increase = 0.1) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(title = 'B2',
+       y = 'Relative abundance (%)')
+
+p.phylo.d <- gst.relab.phylo.long %>% 
+  filter(E_coli_SBI == 'Y' | Group == 'Control') %>%
+  filter(phylogroup == 'D') %>% 
+  ggplot(aes(x = E_coli_SBI_match, y = relab)) +
+  geom_boxplot(aes(fill = E_coli_SBI),
+               alpha = 0.6,
+               outlier.alpha = 0) +
+  geom_beeswarm(cex = 0.5) +
+  scale_fill_manual(values = c('#196689', '#E23B0E')) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = c(0, 10, 50, 100),
+                     limits = c(0, 200)) +
+  # scale_y_continuous(limits = c(0, 100)) +
+  theme_linedraw() + 
+  stat_pvalue_manual(stat.test.phylo.d,
+                     label = 'p.adj', hide.ns = T, step.increase = 0.1) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(title = 'D',
+       y = 'Relative abundance (%)')
+
+
+p.phylo.relab <- ggarrange(p.phylo.a,
+                           p.phylo.b1,
+                           p.phylo.b2,
+                           p.phylo.d,
+                           nrow = 1)
+
+##compare select genomes to reference isolates----
+
+fastani.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                          sheet = 'fastANI') %>% as.data.frame
+
+fastani.list <- c('GCF_013390265.1',
+                  'GCF_019443685.1',
+                  '1057579_Urine')
+
+fastani.list2 <- c('GCF_014169035.1',
+                   '1062153_Urine')
+
+fastani.filt <- fastani.out %>% 
+  filter(ref_name %in% fastani.list &
+           query_name %in% fastani.list)
+
+fastani.filt2 <- fastani.out %>% 
+  filter(ref_name %in% fastani.list2 &
+           query_name %in% fastani.list2)
+
+#virulence factor analysis----
+
+##load VF metadata mapping file
+vf.map <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                     sheet = 'VF mapping file') %>% as.data.frame()
+
+##load output and join with metadata
+vf.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                     sheet = 'shortBRED VF') %>% as.data.frame() %>% 
+  dplyr::rename(vfdb_call = Family) %>% 
+  left_join(vf.map)
+
+vf.sums <- vf.out %>% 
+  group_by(vfdb_call) %>% 
+  summarise(sum = sum(Count))
+
+##define %ni%
+`%ni%` <- Negate(`%in%`)
+
+##filter by Enterobacteriaceae calls and VFs with nonzero counts
+vf.out.nonzero <- vf.out %>% 
+  filter(vfdb_call %ni% (filter(vf.sums, sum == 0))$vfdb_call & family == 'Enterobacteriaceae')
+
+##create wide data frame
+vf.wide <- dcast(vf.out.nonzero, Sample ~ VF_geneID, value.var = "Count")
+row.names(vf.wide) <- vf.wide$Sample
+vf.wide <- vf.wide[, c(-1)]
+
+##test associations----
+
+##want to see whether E coli SBI matches have differences in VF repertoire of their
+##Enterobacteriaceae than E coli-colonized controls
+
+##e coli SBI matches vs E coli-colonized control
+Maaslin2(input_data = vf.wide,
+         input_metadata = filter(m.meta, Participant_ID %in%
+                                   (filter(p.meta,
+                                           (E_coli_SBI == 'Y' & Colonized_final == 'yes') | Group == 'Control'))$Participant_ID &
+                                   Sample %in% ecoli.col),
+         output = "Metagenomics/shortBRED/VFs/MaAsLin2/Ecoli_SBI_matches_v_colonized_control_FINAL",
+         fixed_effects = 'Group',
+         random_effects = 'Sample_Type',
+         reference = 'Group, Control',
+         normalization = 'NONE')
+
+##plot associations----
+
+sig.results <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                          sheet = 'MaAsLin2 VFs') %>% as.data.frame %>%
+  dplyr::mutate(coef_corrected = -coef, log_qval = -log10(qval)) %>% 
+  dplyr::rename(VF_geneID = feature) %>% 
+  left_join(vf.map) %>% 
+  arrange(coef_corrected) %>%
+  filter(qval <= 0.05) %>% 
+  dplyr::mutate(VF_category_fixed = case_when((VF_category == '_-_Exotoxin_') ~
+                                                'Exotoxin',
+                                              (VF_category == '_-_Nutritional_Metabolic_factor_') ~
+                                                'Nutritional_Metabolic_factor',
+                                              (VF_category == '_-_Adherence_') ~
+                                                'Adherence',
+                                              (VF_category == '_-_Invasion_') ~
+                                                'Invasion'))
+
+gene_labels <- sig.results$gene_name
+
+p.vf.sig.results <- sig.results %>%
+  ggplot(aes(x = gene_name, y = coef_corrected)) +
+  geom_point(stat = 'identity', aes(size = log_qval, colour = VF_category_fixed)) +
+  scale_x_discrete(limits = gene_labels) +
+  theme_linedraw() +
+  theme(legend.position = 'right',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 0.4)
+
+##then, run Fisher's exact test on these to determine if the prevalence is also higher in cases
+vf.binary <- vf.wide
+vf.binary[vf.binary > 0] <- 1
+
+vf.binary$Sample <- row.names(vf.binary)
+vf.binary.meta <- left_join(vf.binary,
+                            dplyr::select(p.meta, c(Sample, Group))) %>%
+  filter(Sample %in% (filter(p.meta,
+                             (E_coli_SBI == 'Y' & Colonized_final == 'yes') |
+                               (Group == 'Control' & Sample %in% ecoli.col)))$Sample) %>% 
+  dplyr::rename(outcome = Group)
+
+row.names(vf.binary.meta) <- vf.binary.meta$Sample
+vf.binary.meta$Sample <- NULL
+
+#define outcome (disease)
+outcome <- vf.binary.meta$outcome
+vf.binary.meta$outcome <- NULL
+
+sig.genes <- sig.results$VF_geneID
+
+vf.binary.filt <- vf.binary.meta[, sig.genes]
+
+#initialize p value list for Fisher's exact test
+p_values_vf <- numeric(ncol(vf.binary.filt))
+
+gene.list <- colnames(vf.binary.filt)
+
+for (i in 1:ncol(vf.binary.filt)) {
+  contingency_table <- table(vf.binary.filt[, i], outcome)
+  p_values_vf[i] <- fisher.test(contingency_table)$p.value
+}
+
+adjusted_p_values_vf <- p.adjust(p_values_vf, method = "BH")
+
+p.linked.vf <- data.frame(gene.list, adjusted_p_values_vf) %>%
+  dplyr::rename(VF_geneID = gene.list) %>% 
+  left_join(vf.map)
+
+p.linked.vf %>% 
+  select(c(VF_geneID, gene_name, adjusted_p_values_vf)) %>% 
+  dplyr::rename(p_adjust = adjusted_p_values_vf) %>%
+  arrange(p_adjust)
