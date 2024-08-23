@@ -1,0 +1,291 @@
+#Code to replicate Figure 3 results
+#updated Friday, August 23rd, 2024
+
+#setup----
+
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(tibble)
+library(vegan)
+library(phyloseq)
+library(reshape2)
+library(ggpubr)
+library(tidyr)
+library(ggbeeswarm)
+library(ape)
+library(ggExtra)
+
+set.seed(42)
+
+#set working directory
+setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
+
+#participant metadata
+p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Participant metadata') %>% 
+  as.data.frame()
+row.names(p.meta) <- p.meta$Sample
+samples <- row.names(p.meta)
+
+#metagenome metadata
+m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Metagenome metadata') %>% 
+  as.data.frame()
+row.names(m.meta) <- m.meta$Sample
+
+##load phyloseq object----
+
+#format raw MetaPhlAn4 output for phyloseq
+#load data frame
+m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
+                     skip = 1) %>% as.data.frame()
+row.names(m4.raw) <- m4.raw$clade_name
+m4.raw$clade_name <- NULL
+
+#filter out rows containing strain-level annotations that are new to metaphlan4
+m4.raw <- m4.raw %>% filter(!grepl('t__',rownames(.)))
+
+#take only rows that include s__ (species level annotation)
+m4.sp <- m4.raw[grepl('s__', rownames(m4.raw)), ]
+
+#create phyloseq taxa table
+spp <- data.frame(Names = rownames(m4.sp))
+spp <- data.frame(do.call('rbind', strsplit(as.character(spp$Names),'|',fixed=TRUE)))
+rownames(spp) <- rownames(m4.sp)
+colnames(spp) <- c('Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species')
+
+#remove prefixes from taxa
+spp$Domain <- gsub('k__', '', spp$Domain)
+spp$Phylum <- gsub('p__', '', spp$Phylum)
+spp$Class <- gsub('c__', '', spp$Class)
+spp$Order <- gsub('o__', '', spp$Order)
+spp$Family <- gsub('f__', '', spp$Family)
+spp$Genus <- gsub('g__', '', spp$Genus)
+spp$Species <- gsub('s__', '', spp$Species)
+
+#convert to matrix
+spp <- as.matrix(spp)
+
+#make phyloseq object
+ps <- phyloseq(otu_table(m4.sp, taxa_are_rows = TRUE),
+               sample_data(p.meta),
+               tax_table(spp))
+
+##create wide species data frame
+ps.spp <- tax_glom(ps, taxrank = 'Species')
+ps.spp.df <- psmelt(ps.spp)
+ps.spp.df.wide <- dcast(ps.spp.df, Sample ~ Species, value.var = "Abundance")
+row.names(ps.spp.df.wide) <- ps.spp.df.wide$Sample
+ps.spp.df.wide$Sample <- NULL
+
+#taxonomic analysis----
+
+##metaphlan4----
+
+###alpha diversity----
+
+##convert relative abundance measurements to integers, preserving precision to 0.00001%
+##ignore warning pertaining to singletons (relevant for amplicon sequencing)
+ps.int <- transform_sample_counts(ps, function(x) trunc(x*100000))
+adiv <- estimate_richness(ps.int, measures=c('Observed', 'Shannon'))
+
+##append alpha diversity metrics to phyloseq object
+sample_data(ps)$Richness <- adiv$Observed
+sample_data(ps)$Shannon <- adiv$Shannon
+
+##gather metadata to long format
+ps.df <- data.frame(sample_data(ps))
+ps.df.a <- gather(ps.df, Alpha_Measure, Value, Richness:Shannon, factor_key = TRUE)
+ps.df.a$Group <- factor(ps.df.a$Group,
+                        levels=c("Case", "Control"))
+
+##check whether variables are normally distributed
+shapiro.test(filter(ps.df.a, Alpha_Measure == "Richness")$Value) #significant, nonnormal
+shapiro.test(filter(ps.df.a, Alpha_Measure == "Shannon")$Value) #insignificant (p = 0.51), normal
+
+##plot richness
+p.adiv <- ps.df.a %>% 
+  ggplot(aes(x = Group, y = Value, fill = Group)) +
+  geom_violin(alpha = 0.6) +
+  geom_beeswarm(cex = 2) +
+  stat_compare_means(aes(label = paste0('p = ', after_stat(p.format)))) +
+  stat_summary(fun = 'median',
+               geom = 'crossbar',
+               width = 0.5) +
+  theme_linedraw() +
+  scale_fill_manual(values = c('#E23B0E', '#196689')) +
+  facet_wrap(~Alpha_Measure, nrow = 1, scale = 'free_y') +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(y = 'Taxa (MetaPhlAn4)')
+
+###beta diversity----
+
+##compute bray-curtis dissimilarity scores
+ps.spp.bray <- vegdist(ps.spp.df.wide, method = 'bray')
+ps.spp.pcoa <- pcoa(ps.spp.bray)
+spp.pc1 <- 100 * (ps.spp.pcoa$values$Eigenvalues[1]/sum(ps.spp.pcoa$values$Eigenvalues))
+spp.pc2 <- 100 * (ps.spp.pcoa$values$Eigenvalues[2]/sum(ps.spp.pcoa$values$Eigenvalues))
+ps.spp.pcoa.plot <- data.frame(ps.spp.pcoa$vectors[ , ])
+
+##format output for pcoa plot
+ps.spp.meta <- ps.spp.df.wide
+ps.spp.meta$Sample <- row.names(ps.spp.meta)
+ps.spp.meta <- left_join(ps.spp.meta, p.meta)
+ps.spp.meta$Axis.1 <- ps.spp.pcoa.plot$Axis.1
+ps.spp.meta$Axis.2 <- ps.spp.pcoa.plot$Axis.2
+row.names(ps.spp.meta) <- ps.spp.meta$Sample
+
+##run PERMANOVA with Adonis2
+adonis2(ps.spp.bray ~ Group, data = ps.spp.meta,
+        permutations = 9999, method = 'bray') # p = 0.46, no difference between cases and controls
+
+##plot pcoa
+p.bdiv <- ggMarginal((ps.spp.meta %>% 
+                        ggplot(aes(x = Axis.1, y = Axis.2, color = Group)) +
+                        geom_point(size = 1.5, alpha = 0.8) +
+                        stat_ellipse(geom = 'polygon', alpha = 0.05) +
+                        theme_linedraw() +
+                        scale_color_manual(values = c('#E23B0E', '#196689')) +
+                        theme(legend.position = 'bottom',
+                              axis.title.x = element_text(size = 15),
+                              axis.title.y = element_text(size = 15),
+                              axis.text.y = element_text(size=15),
+                              axis.text.x = element_text(size=12, angle=45, hjust=1),
+                              strip.text.x = element_text(size=15),
+                              aspect.ratio = 1) +
+                        labs(x = 'Axis 1 (5.8%)', y = 'Axis 2(5.5%)')),
+                     type = 'boxplot', groupColour = T)
+
+##test for differences by axis (Mann-Whitney U test)
+wilcox.test(Axis.1 ~ Group,
+            data = ps.spp.meta,
+            na.rm = TRUE, paired = FALSE, exact = FALSE, conf.int = TRUE) # p = 0.64
+wilcox.test(Axis.2 ~ Group,
+            data = ps.spp.meta,
+            na.rm = TRUE, paired = FALSE, exact = FALSE, conf.int = TRUE) # p = 0.38
+
+###test for taxonomic associations between groups----
+
+##all case v control
+Maaslin2(input_data = ps.spp.df.wide,
+         input_metadata = m.meta,
+         output = "Metagenomics/MetaPhlAn4/MaAsLin2/Case_v_control/Species_FINAL",
+         fixed_effects = 'Group',
+         random_effects = 'Sample_Type',
+         reference = 'Group, Control')
+
+##e coli sbi vs. control
+Maaslin2(input_data = ps.spp.df.wide,
+         input_metadata = filter(m.meta, Participant_ID %in%
+                                   (filter(p.meta,
+                                           E_coli_SBI == 'Y' | Group == 'Control'))$Participant_ID),
+         output = "Metagenomics/MetaPhlAn4/MaAsLin2/Ecoli_SBI_v_control/Species_FINAL",
+         fixed_effects = 'Group',
+         random_effects = 'Sample_Type',
+         reference = 'Group, Control')
+
+##e faecalis UTI vs control
+Maaslin2(input_data = ps.spp.df.wide,
+         input_metadata = filter(m.meta, Participant_ID %in%
+                                   (filter(p.meta,
+                                           E_faecalis_UTI == 'Y' | Group == 'Control'))$Participant_ID),
+         output = "Metagenomics/MetaPhlAn4/MaAsLin2/Efaecalis_UTI_v_control/Species_FINAL",
+         fixed_effects = 'Group',
+         random_effects = 'Sample_Type',
+         reference = 'Group, Control')
+
+##group B strep UTI vs control
+##lowering prevalence to 1% since it is rarely found
+Maaslin2(input_data = ps.spp.df.wide,
+         input_metadata = filter(m.meta, Participant_ID %in%
+                                   (filter(p.meta,
+                                           GBS_UTI == 'Y' | Group == 'Control'))$Participant_ID),
+         output = "Metagenomics/MetaPhlAn4/MaAsLin2/GBS_UTI_v_control/Species_FINAL",
+         fixed_effects = 'Group',
+         random_effects = 'Sample_Type',
+         reference = 'Group, Control',
+         min_prevalence = 0.01)
+
+##plot e coli relative abundance b/w SBI cases and controls
+##NOTE: MaAsLin2 corrected p-value and coefficient overlaid on top of plot in illustrator
+
+p.ecoli.sbi.maaslin <- ps.spp.df %>% 
+  filter(Species == "Escherichia_coli") %>% 
+  filter(E_coli_SBI == "Y" | Group == "Control") %>% 
+  ggplot(aes(x = Group, y = Abundance, fill = Group)) +
+  geom_boxplot(alpha = 0.6) +
+  geom_beeswarm(cex = 0.5) +
+  # stat_compare_means(aes(label = paste0('p = ', after_stat(p.format)))) +
+  stat_summary(fun = 'median',
+               geom = 'crossbar',
+               width = 0.5) +
+  theme_linedraw() +
+  scale_fill_manual(values = c('#E23B0E', '#196689')) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(y = 'E. coli relative abundance (%)')
+
+##compare prevalence of E. coli in infants with E. coli SBIs vs. controls
+##based on metaphlan4 (not strain-level) data
+e.coli.prev <- ps.spp.df %>%
+  filter(Species == 'Escherichia_coli' & (E_coli_SBI == 'Y' | Group == 'Control')) %>%
+  group_by(E_coli_SBI == 'Y') %>% dplyr::count(Abundance > 0)
+
+##manually entering numbers found above into matrix
+e.coli.prev.matrix <- matrix(c(27, 0, 52, 28), nrow = 2, byrow = TRUE)
+
+rownames(e.coli.prev.matrix) <- c("E. coli SBI cases", "Controls")
+colnames(e.coli.prev.matrix) <- c("Colonized", "Not Colonized")
+
+#check that all looks well
+e.coli.prev.matrix
+
+#p-value = 8.434e-05
+fisher.test(e.coli.prev.matrix)
+
+##test age vs. E coli relative abundance for E coli SBI cases (matches visualized) vs controls
+
+ps.spp.df.ecoli.dol <- ps.spp.df %>% 
+  filter(Species == "Escherichia_coli") %>% 
+  filter(E_coli_SBI == "Y" | Group == "Control")
+
+##set model
+m.ecoli.relab.dol <- lm(Abundance ~ DOL*Group, data = ps.spp.df.ecoli.dol)
+
+##extract slopes and p-values
+summary(m.ecoli.relab.dol) #p-value of interaction term = 0.017
+
+##plot
+p.lm.ecoli <- ps.spp.df.ecoli.dol %>% 
+  ggplot(aes(x = DOL, y = Abundance)) +
+  geom_point(alpha = 0.7, aes(color = Colonized_final,
+                              fill = Group, size = Colonized_final), shape = 21) +
+  stat_smooth(method = 'lm', formula = y ~ x, aes(color = Group)) +
+  theme_classic() +
+  scale_fill_manual(values = c('#E23B0E', '#196689')) +
+  scale_color_manual(values = c('#E23B0E', '#196689', 'NA', 'black')) +
+  scale_size_manual(values = c(2, 3)) +
+  theme(legend.position = 'right',
+        axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=12),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 0.6) +
+  labs(x = 'Day of life', y = 'E. coli abundance') +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10),
+                     breaks = c(0, 10, 100, 1000, 10000, 100000))
+
+
