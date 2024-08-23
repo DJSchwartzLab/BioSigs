@@ -1,0 +1,211 @@
+#Code to replicate Figure 2 results
+#updated Friday, August 23rd, 2024
+
+#setup----
+
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(tibble)
+library(vegan)
+library(phyloseq)
+library(reshape2)
+library(ggpubr)
+
+set.seed(42)
+
+#set working directory
+setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
+
+#participant metadata
+p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Participant metadata') %>% 
+  as.data.frame()
+row.names(p.meta) <- p.meta$Sample
+samples <- row.names(p.meta)
+
+#isolate metadata
+i.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = "Isolate metadata") %>% 
+  merge(select(p.meta, c(Participant_ID, Sample)), by = 'Participant_ID') %>% 
+  as.data.frame()
+row.names(i.meta) <- i.meta$Sample_ID
+isolates <- row.names(i.meta)
+
+#metagenome metadata
+m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Metagenome metadata') %>% 
+  as.data.frame()
+row.names(m.meta) <- m.meta$Sample
+
+##load phyloseq object----
+
+#format raw MetaPhlAn4 output for phyloseq
+#load data frame
+m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
+                     skip = 1) %>% as.data.frame()
+row.names(m4.raw) <- m4.raw$clade_name
+m4.raw$clade_name <- NULL
+
+#filter out rows containing strain-level annotations that are new to metaphlan4
+m4.raw <- m4.raw %>% filter(!grepl('t__',rownames(.)))
+
+#take only rows that include s__ (species level annotation)
+m4.sp <- m4.raw[grepl('s__', rownames(m4.raw)), ]
+
+#create phyloseq taxa table
+spp <- data.frame(Names = rownames(m4.sp))
+spp <- data.frame(do.call('rbind', strsplit(as.character(spp$Names),'|',fixed=TRUE)))
+rownames(spp) <- rownames(m4.sp)
+colnames(spp) <- c('Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species')
+
+#remove prefixes from taxa
+spp$Domain <- gsub('k__', '', spp$Domain)
+spp$Phylum <- gsub('p__', '', spp$Phylum)
+spp$Class <- gsub('c__', '', spp$Class)
+spp$Order <- gsub('o__', '', spp$Order)
+spp$Family <- gsub('f__', '', spp$Family)
+spp$Genus <- gsub('g__', '', spp$Genus)
+spp$Species <- gsub('s__', '', spp$Species)
+
+#convert to matrix
+spp <- as.matrix(spp)
+
+#make phyloseq object
+ps <- phyloseq(otu_table(m4.sp, taxa_are_rows = TRUE),
+               sample_data(p.meta),
+               tax_table(spp))
+
+##create wide species data frame
+ps.spp <- tax_glom(ps, taxrank = 'Species')
+ps.spp.df <- psmelt(ps.spp)
+ps.spp.df.wide <- dcast(ps.spp.df, Sample ~ Species, value.var = "Abundance")
+row.names(ps.spp.df.wide) <- ps.spp.df.wide$Sample
+ps.spp.df.wide$Sample <- NULL
+
+#instrain analysis----
+
+##prep data----
+
+#load genome map
+g.map <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx',
+                    sheet = 'inStrain profile') %>% as.data.frame()
+
+g.map.edited <- g.map %>% 
+  select(c('metagenome', 'genome', 'coverage', 'breadth', 'length',
+           'popANI_reference', 'SNS_count', 'SNV_count')) %>% 
+  left_join(select(dplyr::rename(m.meta, metagenome = Sample),
+                   c(Participant_ID, Group, metagenome)), by = 'metagenome') %>% 
+  dplyr::rename(meta_ID = Participant_ID,
+                meta_Group = Group) %>% 
+  left_join(select(dplyr::rename(i.meta, genome = Sample_ID),
+                   c(Participant_ID, Source, Sample_Type, Species_MALDI,
+                     ST_insilico, Fecta, genome)), by = 'genome') %>% 
+  dplyr::rename(genome_ID = Participant_ID,
+                genome_source = Source,
+                genome_sample_type = Sample_Type,
+                genome_species = Species_MALDI,
+                genome_ST = ST_insilico,
+                genome_fecta = Fecta) %>% 
+  mutate(same_infant = (meta_ID == genome_ID)) %>% 
+  mutate(logpopANI = (-log10(1 - popANI_reference)),
+         logSNSrate = (-log10(SNS_count/length)),
+         logbreadth = (-log10(1 - breadth)),
+         is_match = (same_infant == "TRUE" & breadth > 0.5 & popANI_reference >= 0.99999 & genome_sample_type == 'Extraintestinal'),
+         culture_match = (same_infant == "TRUE" & genome_fecta != "Imperfecta" & genome_fecta != "Duds" & genome_sample_type == 'Extraintestinal'),
+         colonized = (is_match =="TRUE" | culture_match == "TRUE")) %>% 
+  mutate(fig2a_group = case_when((same_infant == 'TRUE' & culture_match == 'TRUE') ~ "same_infant_match",
+                                 (same_infant == 'TRUE' & culture_match == 'FALSE') ~ "same_infant_no_match",
+                                 (same_infant == 'FALSE') ~ "between_infant"))
+
+#define infinite numbers
+g.map.edited$logpopANI[is.infinite(g.map.edited$logpopANI)] <- 7
+g.map.edited$logSNSrate[is.infinite(g.map.edited$logSNSrate)] <- 7
+g.map.edited$logbreadth[is.infinite(g.map.edited$logbreadth)] <- 7
+
+#define match lists
+is_match <- unique((filter(g.map.edited, is_match == "TRUE"))$genome_ID)
+culture_match <- unique((filter(g.map.edited, culture_match == "TRUE"))$genome_ID)
+matches <- unique(c(is_match, culture_match))
+
+#load metagenomic read depth table
+read.depth <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx',
+                         sheet = 'read counts') %>% as.data.frame() %>% 
+  dplyr::rename(metagenome = Sample)
+
+#update genome map table with normalized coverage and metagenome groupings
+g.map.edited.2 <- g.map.edited %>% 
+  left_join(read.depth) %>% 
+  mutate(norm_coverage = (coverage/Postprocessed_reads) * 1000000) %>% 
+  mutate(match = case_when((colonized == 'TRUE' & is_match == 'TRUE' & culture_match == 'TRUE') ~
+                             'both',
+                           (colonized == 'TRUE' & is_match == 'FALSE' & culture_match == 'TRUE') ~
+                             'culture_only',
+                           (colonized == 'TRUE' & is_match == 'TRUE' & culture_match == 'FALSE') ~
+                             'is_only',
+                           (colonized == 'FALSE') ~ 'not_colonized')) %>% 
+  left_join(select(rownames_to_column(ps.spp.df.wide, var = 'metagenome'),
+                   c('Escherichia_coli', 'Klebsiella_pneumoniae',
+                     'Streptococcus_agalactiae', 'Enterococcus_faecalis',
+                     'Enterobacter_cloacae', 'Proteus_mirabilis', 'metagenome'))) %>% 
+  mutate(genome_relab = case_when((genome_species == 'Escherichia coli') ~ .$Escherichia_coli,
+                                  (genome_species == 'Klebsiella pneumoniae') ~ .$Klebsiella_pneumoniae,
+                                  (genome_species == 'Streptococcus agalactiae') ~ .$Streptococcus_agalactiae,
+                                  (genome_species == 'Enterococcus faecalis') ~ .$Enterococcus_faecalis,
+                                  (genome_species == 'Enterobacter cloacae') ~ .$Enterobacter_cloacae,
+                                  (genome_species == 'Proteus mirabilis') ~ .$Proteus_mirabilis)) %>% 
+  select(!c('Escherichia_coli', 'Klebsiella_pneumoniae',
+            'Streptococcus_agalactiae', 'Enterococcus_faecalis',
+            'Enterobacter_cloacae', 'Proteus_mirabilis'))
+
+##plot metagenomic read mapping to extraintestinal isolate results (breadth vs. popANI)
+p.is.all <- g.map.edited.2 %>% 
+  filter(genome_sample_type != 'Intestinal' & breadth >= 0.5) %>% 
+  arrange(same_infant, culture_match) %>% 
+  ggplot(aes(x = logbreadth, y = logpopANI)) +
+  geom_point(aes(color = fig2a_group,
+                 fill = fig2a_group,
+                 alpha = same_infant,
+                 size = norm_coverage), shape = 21) +
+  scale_color_manual(values = c("#008FF8", "black", 'NA')) +
+  scale_fill_manual(values = c('NA', '#E23B0E', '#FEAE2D')) +
+  scale_alpha_discrete(range = c(0.7, 1.0)) +
+  theme_linedraw() +
+  labs(x = "-Log(1-Breadth)", y = "-Log(1-populationANI)") +
+  geom_hline(yintercept = 5, linetype = 'dotted', col = 'red') +
+  theme(aspect.ratio = 1)
+
+##plot
+p.relab.cov <- g.map.edited.2 %>%
+  filter(colonized == 'TRUE') %>%
+  arrange(desc(culture_match)) %>%
+  ggscatter(x = 'genome_relab', y = 'norm_coverage',
+            add = 'reg.line',
+            point = F) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = c(0, 1, 10, 100)) +
+  scale_x_continuous(trans = scales::pseudo_log_trans(base = 10), breaks = c(0, 1, 10, 50, 100)) +
+  # scale_x_log10(breaks = c(0, 0.1, 1, 10, 50)) +
+  # scale_y_log10() +
+  theme_linedraw() +
+  stat_cor() +
+  geom_vline(xintercept = 1, linetype = 'dotted', col = 'red') +
+  geom_point(alpha = 1.0, mapping = aes(fill = match, size = logpopANI),
+             shape = 21) +
+  # scale_color_manual(values = c("black", 'black', "NA")) +
+  scale_fill_manual(values = c('grey', '#566573', 'white')) +
+  theme(aspect.ratio = 1)
+
+
+##assess differences in breadth of coverage between colonized groupings (default two-sided)
+##p = 4.604e-05
+wilcox.test(x = (filter(g.map.edited.2, (match == 'is_only' | match == 'both') &
+                          genome_sample_type == 'Extraintestinal'))$breadth,
+            y = (filter(g.map.edited.2, (match == 'culture_only') &
+                          genome_sample_type == 'Extraintestinal'))$breadth)
+
+##assess differences in sp relative abundance between colonized groupings (default two-sided)
+##p = 4.564-05
+wilcox.test(x = (filter(g.map.edited.2, (match == 'is_only' | match == 'both') &
+                          genome_sample_type == 'Extraintestinal'))$genome_relab,
+            y = (filter(g.map.edited.2, (match == 'culture_only') &
+                          genome_sample_type == 'Extraintestinal'))$genome_relab)
