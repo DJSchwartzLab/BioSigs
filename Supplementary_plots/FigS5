@@ -1,0 +1,165 @@
+#Code to replicate Figure S5 results
+#updated Saturday, August 24th, 2024
+
+#setup----
+
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(tibble)
+library(reshape2)
+library(vegan)
+library(ggbeeswarm)
+library(ggpubr)
+
+set.seed(42)
+
+#set working directory
+setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
+
+#participant metadata
+p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
+                     sheet = 'Participant metadata') %>% 
+  as.data.frame()
+row.names(p.meta) <- p.meta$Sample
+samples <- row.names(p.meta)
+
+##load phyloseq object----
+
+#format raw MetaPhlAn4 output for phyloseq
+#load data frame
+m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
+                     skip = 1) %>% as.data.frame()
+row.names(m4.raw) <- m4.raw$clade_name
+m4.raw$clade_name <- NULL
+
+#filter out rows containing strain-level annotations that are new to metaphlan4
+m4.raw <- m4.raw %>% filter(!grepl('t__',rownames(.)))
+
+#take only rows that include s__ (species level annotation)
+m4.sp <- m4.raw[grepl('s__', rownames(m4.raw)), ]
+
+#create phyloseq taxa table
+spp <- data.frame(Names = rownames(m4.sp))
+spp <- data.frame(do.call('rbind', strsplit(as.character(spp$Names),'|',fixed=TRUE)))
+rownames(spp) <- rownames(m4.sp)
+colnames(spp) <- c('Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species')
+
+#remove prefixes from taxa
+spp$Domain <- gsub('k__', '', spp$Domain)
+spp$Phylum <- gsub('p__', '', spp$Phylum)
+spp$Class <- gsub('c__', '', spp$Class)
+spp$Order <- gsub('o__', '', spp$Order)
+spp$Family <- gsub('f__', '', spp$Family)
+spp$Genus <- gsub('g__', '', spp$Genus)
+spp$Species <- gsub('s__', '', spp$Species)
+
+#convert to matrix
+spp <- as.matrix(spp)
+
+#make phyloseq object
+ps <- phyloseq(otu_table(m4.sp, taxa_are_rows = TRUE),
+               sample_data(p.meta),
+               tax_table(spp))
+
+##create wide species data frame
+ps.spp <- tax_glom(ps, taxrank = 'Species')
+ps.spp.df <- psmelt(ps.spp)
+ps.spp.df.wide <- dcast(ps.spp.df, Sample ~ Species, value.var = "Abundance")
+row.names(ps.spp.df.wide) <- ps.spp.df.wide$Sample
+ps.spp.df.wide$Sample <- NULL
+
+##define e coli-colonized samples
+ecoli.col.df <- ps.spp.df %>% 
+  filter(Species == 'Escherichia_coli' & Abundance > 0)
+
+ecoli.col <- ecoli.col.df$Sample
+
+#virulence factor analysis----
+
+##load VF metadata mapping file
+vf.map <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                     sheet = 'VF mapping file') %>% as.data.frame()
+
+##load output and join with metadata
+vf.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+                     sheet = 'shortBRED VF') %>% as.data.frame() %>% 
+  dplyr::rename(vfdb_call = Family) %>% 
+  left_join(vf.map)
+
+vf.sums <- vf.out %>% 
+  group_by(vfdb_call) %>% 
+  summarise(sum = sum(Count))
+
+##define %ni%
+`%ni%` <- Negate(`%in%`)
+
+##filter by Enterobacteriaceae calls and VFs with nonzero counts
+vf.out.nonzero <- vf.out %>% 
+  filter(vfdb_call %ni% (filter(vf.sums, sum == 0))$vfdb_call & family == 'Enterobacteriaceae')
+
+##create wide data frame
+vf.wide <- dcast(vf.out.nonzero, Sample ~ VF_geneID, value.var = "Count")
+row.names(vf.wide) <- vf.wide$Sample
+vf.wide <- vf.wide[, c(-1)]
+
+##compare VF richness and burden b/w E coli SBI matches and colonized controls----
+
+##sum counts to get RPKM per sample
+vf.wide$RPKM <- rowSums(vf.wide)
+
+##get ARG richness
+vf.wide$Richness <- specnumber(vf.wide[, 1:ncol(vf.wide)-1])
+
+##add columns to metadata frame
+vf.wide.meta <- select(vf.wide, RPKM, Richness)
+vf.wide.meta$Sample <- row.names(vf.wide.meta)
+vf.wide.meta <- left_join(p.meta, vf.wide.meta, by = 'Sample')
+
+##test whether VF alpha diversity metrics are normally distributed before testing
+shapiro.test(vf.wide.meta$RPKM) #p = 1.361e-13, non-normal
+shapiro.test(vf.wide.meta$Richness) #p = 0.009, non-normal
+
+#p = 0.008, significant
+p.vf.rpkm <- vf.wide.meta %>%
+  filter((E_coli_SBI == 'Y' & Colonized_final == 'yes') |
+           (Group == 'Control' & Sample %in% ecoli.col)) %>% 
+  ggplot(aes(x = Group, y = RPKM, fill = Group)) +
+  geom_boxplot(outlier.alpha = 0, alpha = 0.6) +
+  geom_beeswarm(cex = 2) +
+  stat_compare_means(aes(label = paste0('p = ', after_stat(p.format)))) +
+  stat_summary(fun = 'median',
+               geom = 'crossbar',
+               width = 0.5) +
+  theme_linedraw() +
+  scale_fill_manual(values = c('#E23B0E', '#196689')) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(y = 'VF RPKM')
+
+#p = 3.300e-4, significant
+p.vf.richness <- vf.wide.meta %>% 
+  filter((E_coli_SBI == 'Y' & Colonized_final == 'yes') |
+           (Group == 'Control' & Sample %in% ecoli.col)) %>% 
+  ggplot(aes(x = Group, y = Richness, fill = Group)) +
+  geom_boxplot(outlier.alpha = 0, alpha = 0.6) +
+  geom_beeswarm() +
+  stat_compare_means(aes(label = paste0('p = ', after_stat(p.format)))) +
+  stat_summary(fun = 'median',
+               geom = 'crossbar',
+               width = 0.5) +
+  theme_linedraw() +
+  scale_fill_manual(values = c('#E23B0E', '#196689')) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 1.8) +
+  labs(y = 'VF Richness')
