@@ -1,0 +1,64 @@
+#Code to replicate Figure S1 results
+#updated Saturday, August 24th, 2024
+
+library(dplyr)
+library(vegan)
+library(phyloseq)
+library(ape)
+library(ggplot2)
+library(readxl)
+
+set.seed(42)
+
+sp.wide <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx',
+                      sheet = 'stool vs. swab analysis') %>% as.data.frame() %>% 
+  select(-c(Sample_type, Participant)) %>% 
+  filter(Sample %in% metadata$Sample)
+row.names(sp.wide) <- sp.wide$Sample
+sp.wide$Sample <- NULL
+
+sp.bray <- vegdist(sp.wide, method = 'bray')
+sp.pcoa <- pcoa(sp.bray)
+
+sp.pc1 <- 100 * (sp.pcoa$values$Eigenvalues[1]/sum(sp.pcoa$values$Eigenvalues))
+sp.pc2 <- 100 * (sp.pcoa$values$Eigenvalues[2]/sum(sp.pcoa$values$Eigenvalues))
+sp.pcoa.plot <- data.frame(sp.pcoa$vectors[ , ])
+
+sp.pcoa.plot$Sample <- row.names(sp.pcoa.plot)
+
+metadata.pcoa <- left_join(metadata, sp.pcoa.plot,
+                           by = 'Sample') %>% 
+  filter(is.na(Axis.1) == FALSE) %>% 
+  transform(Sample_type = as.factor(Sample_type),
+            Subject = as.factor(Subject))
+row.names(metadata.pcoa) <- metadata.pcoa$Sample
+
+adonis2(sp.bray ~ Sample_type, data = metadata.pcoa, permutations = 9999, method = 'bray')
+
+p.sampletype <- metadata.pcoa %>%
+  ggplot(aes(x = Axis.1, y = Axis.2)) +
+  geom_point(aes(color = Sample_type, alpha = 0.3, size = 1)) +
+  geom_line(aes(group = Subject), color = "black") +
+  theme_linedraw() +
+  scale_color_manual(values = c('blue', 'orange')) +
+  theme(legend.position = 'bottom',
+        axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(size=12, angle=45, hjust=1),
+        strip.text.x = element_text(size=15),
+        aspect.ratio = 0.6) +
+  labs(x = 'Axis 1 (25.0%)', y = 'Axis 2 (19.6%)')
+
+sp.pcoa.plot.stool <- filter(sp.pcoa.plot, Sample %in% (filter(metadata, Sample_type == 'Stool'))$Sample)
+sp.pcoa.plot.swab <- filter(sp.pcoa.plot, Sample %in% (filter(metadata, Sample_type == 'Swab'))$Sample)
+
+sp.pcoa.plot.stool$Sample <- NULL
+sp.pcoa.plot.swab$Sample <- NULL
+
+sp.pcoa.plot.stool <- data.matrix(sp.pcoa.plot.stool)
+sp.pcoa.plot.swab <- data.matrix(sp.pcoa.plot.swab)
+
+protest(X = sp.pcoa.plot.stool,
+        Y = sp.pcoa.plot.swab,
+        scores = "sites", permutations = 999)
