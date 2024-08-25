@@ -1,4 +1,4 @@
-#Code to replicate Figure S1 results
+#Code to replicate Figure S2 results
 #updated Saturday, August 24th, 2024
 
 library(dplyr)
