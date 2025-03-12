@@ -1,5 +1,5 @@
 #Code to replicate Figure 4 results
-#updated Friday, August 23rd, 2024
+#updated Monday, December 23rd, 2024
 
 #setup----
 
@@ -17,6 +17,7 @@ library(ggtreeExtra)
 library(tableone)
 library(rstatix)
 library(phyloseq)
+library(Maaslin2)
 
 set.seed(42)
 
@@ -24,15 +25,13 @@ set.seed(42)
 setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
 
 #participant metadata
-p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Participant metadata') %>% 
+p.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet1_filt_v2.csv') %>% 
   as.data.frame()
 row.names(p.meta) <- p.meta$Sample
 samples <- row.names(p.meta)
 
 #metagenome metadata
-m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Metagenome metadata') %>% 
+m.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet2_filt.csv') %>% 
   as.data.frame()
 row.names(m.meta) <- m.meta$Sample
 
@@ -40,8 +39,9 @@ row.names(m.meta) <- m.meta$Sample
 
 #format raw MetaPhlAn4 output for phyloseq
 #load data frame
-m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
-                     skip = 1) %>% as.data.frame()
+m4.raw <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet3_filt.csv',
+                   check.names = F) %>% 
+  as.data.frame()
 row.names(m4.raw) <- m4.raw$clade_name
 m4.raw$clade_name <- NULL
 
@@ -92,8 +92,8 @@ ecoli.col <- ecoli.col.df$Sample
 ##load output----
 
 #strainGST output
-gst.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
-                      sheet = 'strainGST') %>% as.data.frame()
+gst.out <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file4_sheet2_filt.csv') %>%
+  as.data.frame()
 
 ##prep data----
 
@@ -108,10 +108,10 @@ gst.meta <- gst.out %>%
 
 ##reference strain cladogram----
 
-gst.tree <- read.tree('ExtendedData/240823_fasttree_core_genome_tree_filtered.newick')
+gst.tree <- read.tree('ExtendedData/Resubmission/250106_fasttree_core_genome_tree_filtered.newick')
 
 ##load strain metadata
-gst.viz.data <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+gst.viz.data <- read_excel('ExtendedData/First_submission/240822_BioSigs_extended_data_file4.xlsx',
                            sheet = 'tree metadata') %>% as.data.frame() %>% 
   dplyr::rename(ID = tip.label) %>% 
   filter(ID %in% filter(gst.meta, E_coli_SBI == 'Y' | Group == 'Control')$accession) %>% 
@@ -173,6 +173,11 @@ p.straingst.cladogram <- ggtree(gst.tree, branch.length = 'none') %<+% gst.viz.d
                                 'black', 'NA')) +
   scale_fill_manual(values = c(st.pal[3:13], '#E23B0E', '#196689')) +
   coord_flip()
+
+ggsave(p.straingst.cladogram,
+       file = 'Figures/Resubmission/Fig4/250106_straingst_cladogram.pdf',
+       width = 8, height = 4,
+       units = 'in', device = "pdf")
 
 ##compare phylogroup abundance and prevalence between groups----
 
@@ -237,9 +242,9 @@ tab1Mat <- print(tab1,
                  exact = tab1Vars)
 
 ##manually add adjusted p-values to table
-p.adjust(c(0.274, 0.142, 0.104, 1, 0.381, 0.562),
+p.adjust(c(0.257, 0.146, 0.123, 1, 0.535, 0.428),
          method = 'BH')
-#adjusted p-values: 0.548 (A), 0.426 (B1), 0.426 (B2), 1 (C), 0.5715 (D), 0.6744 (F)
+#adjusted p-values: 0.514 (A), 0.438 (B1), 0.438 (B2), 1 (C), 0.642 (D), 0.642 (F)
 
 ###compare relative abundance----
 
@@ -387,9 +392,14 @@ p.phylo.relab <- ggarrange(p.phylo.a,
                            p.phylo.d,
                            nrow = 1)
 
+ggsave(p.phylo.relab,
+       file = 'Figures/Resubmission/Fig4/241223_phylogroup_relab.pdf',
+       width = 10, height = 6,
+       units = 'in', device = "pdf")
+
 ##compare select genomes to reference isolates----
 
-fastani.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+fastani.out <- read_excel('ExtendedData/First_submission/240822_BioSigs_extended_data_file4.xlsx',
                           sheet = 'fastANI') %>% as.data.frame
 
 fastani.list <- c('GCF_013390265.1',
@@ -407,15 +417,23 @@ fastani.filt2 <- fastani.out %>%
   filter(ref_name %in% fastani.list2 &
            query_name %in% fastani.list2)
 
+##look at multi-strain colonization
+gst.meta %>%
+  distinct(Sample, Group, E_coli_SBI_match, ST) %>%
+  group_by(Sample, E_coli_SBI_match) %>%
+  summarise(unique_STs = n_distinct(ST)) %>%
+  group_by(E_coli_SBI_match) %>%
+  dplyr::count(unique_STs > 1)
+
 #virulence factor analysis----
 
 ##load VF metadata mapping file
-vf.map <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+vf.map <- read_excel('ExtendedData/First_submission/240822_BioSigs_extended_data_file4.xlsx',
                      sheet = 'VF mapping file') %>% as.data.frame()
 
 ##load output and join with metadata
-vf.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
-                     sheet = 'shortBRED VF') %>% as.data.frame() %>% 
+vf.out <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file4_sheet5_filt.csv') %>%
+  as.data.frame() %>% 
   dplyr::rename(vfdb_call = Family) %>% 
   left_join(vf.map)
 
@@ -446,16 +464,15 @@ Maaslin2(input_data = vf.wide,
                                    (filter(p.meta,
                                            (E_coli_SBI == 'Y' & Colonized_final == 'yes') | Group == 'Control'))$Participant_ID &
                                    Sample %in% ecoli.col),
-         output = "Metagenomics/shortBRED/VFs/MaAsLin2/Ecoli_SBI_matches_v_colonized_control_FINAL",
+         output = "/Users/annadeveaux/Box Sync/BioSigPediatricSepsis/Metagenomics/shortBRED/VFs/MaAsLin2/Ecoli_SBI_matches_v_colonized_control_filtered",
          fixed_effects = 'Group',
          random_effects = 'Sample_Type',
-         reference = 'Group, Control',
+         reference = 'Group,Control',
          normalization = 'NONE')
 
 ##plot associations----
 
-sig.results <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
-                          sheet = 'MaAsLin2 VFs') %>% as.data.frame %>%
+sig.results <- read.delim('/Users/annadeveaux/Box Sync/BioSigPediatricSepsis/Metagenomics/shortBRED/VFs/MaAsLin2/Ecoli_SBI_matches_v_colonized_control_filtered/significant_results.tsv') %>% as.data.frame %>%
   dplyr::mutate(coef_corrected = -coef, log_qval = -log10(qval)) %>% 
   dplyr::rename(VF_geneID = feature) %>% 
   left_join(vf.map) %>% 
@@ -468,7 +485,9 @@ sig.results <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx'
                                               (VF_category == '_-_Adherence_') ~
                                                 'Adherence',
                                               (VF_category == '_-_Invasion_') ~
-                                                'Invasion'))
+                                                'Invasion',
+                                              (VF_category == '_-_Effector_delivery_system_') ~
+                                                'Effector_delivery'))
 
 gene_labels <- sig.results$gene_name
 
@@ -483,7 +502,12 @@ p.vf.sig.results <- sig.results %>%
         axis.text.y = element_text(size=15),
         axis.text.x = element_text(size=12, angle=45, hjust=1),
         strip.text.x = element_text(size=15),
-        aspect.ratio = 0.4)
+        aspect.ratio = 0.8)
+
+ggsave(p.vf.sig.results,
+       file = 'Figures/Resubmission/Fig4/241223_vf_enriched.pdf',
+       width = 7, height = 6,
+       units = 'in', device = "pdf")
 
 ##then, run Fisher's exact test on these to determine if the prevalence is also higher in cases
 vf.binary <- vf.wide
@@ -527,4 +551,4 @@ p.linked.vf <- data.frame(gene.list, adjusted_p_values_vf) %>%
 p.linked.vf %>% 
   select(c(VF_geneID, gene_name, adjusted_p_values_vf)) %>% 
   dplyr::rename(p_adjust = adjusted_p_values_vf) %>%
-  arrange(p_adjust)
+  arrange(p_adjust) %>% write.csv('Figures/Resubmission/TableS3/241223_TableS3.csv')
