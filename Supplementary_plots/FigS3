@@ -1,5 +1,5 @@
-#Code to replicate Figure S3 results
-#updated Saturday, August 24th, 2024
+#Code to replicate Figure S4 results
+#updated Monday, December 23rd, 2024
 
 #setup----
 
@@ -22,15 +22,13 @@ set.seed(42)
 setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
 
 #participant metadata
-p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Participant metadata') %>% 
+p.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet1_filt_v2.csv') %>% 
   as.data.frame()
 row.names(p.meta) <- p.meta$Sample
 samples <- row.names(p.meta)
 
 #metagenome metadata
-m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Metagenome metadata') %>% 
+m.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet2_filt.csv') %>% 
   as.data.frame()
 row.names(m.meta) <- m.meta$Sample
 
@@ -38,8 +36,9 @@ row.names(m.meta) <- m.meta$Sample
 
 #format raw MetaPhlAn4 output for phyloseq
 #load data frame
-m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
-                     skip = 1) %>% as.data.frame()
+m4.raw <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet3_filt.csv',
+                   check.names = F) %>% 
+  as.data.frame()
 row.names(m4.raw) <- m4.raw$clade_name
 m4.raw$clade_name <- NULL
 
@@ -134,9 +133,12 @@ p.lm.shannon <- filter(ps.df.a, Alpha_Measure == 'Shannon' &
         axis.text.x = element_text(size=12, angle=45, hjust=1),
         strip.text.x = element_text(size=15),
         aspect.ratio = 0.6) +
-  labs(x = 'Day of life', y = 'Shannon diversity') +
-  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10),
-                     breaks = c(0, 10, 100, 1000, 10000, 100000))
+  labs(x = 'Day of life', y = 'Shannon diversity')
+
+ggsave(p.lm.shannon,
+       file = 'Figures/Resubmission/FigS4/241223_shannon_dol.pdf',
+       width = 6, height = 6,
+       units = 'in', device = "pdf")
 
 ##richness
 p.lm.richness <- filter(ps.df.a, Alpha_Measure == 'Richness' &
@@ -156,13 +158,16 @@ p.lm.richness <- filter(ps.df.a, Alpha_Measure == 'Richness' &
         axis.text.x = element_text(size=12, angle=45, hjust=1),
         strip.text.x = element_text(size=15),
         aspect.ratio = 0.6) +
-  labs(x = 'Day of life', y = 'Species richness') +
-  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10),
-                     breaks = c(0, 10, 100, 1000, 10000, 100000))
+  labs(x = 'Day of life', y = 'Species richness')
+
+ggsave(p.lm.richness,
+       file = 'Figures/Resubmission/FigS4/241223_richness_dol.pdf',
+       width = 6, height = 6,
+       units = 'in', device = "pdf")
 
 #respiration mode----
 
-resp.mode <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+resp.mode <- read_excel('ExtendedData/First_submission/240822_BioSigs_extended_data_file4.xlsx',
                       sheet = 'respiration mode') %>% as.data.frame()
 
 ##prep data frame for plotting
@@ -208,3 +213,8 @@ p.resp.relab <- ps.spp.df.resp %>%
   scale_fill_manual(values = c('#E23B0E', '#196689')) +
   scale_color_manual(values = c('NA', 'black')) +
   scale_size_manual(values = c(2, 3))
+
+ggsave(p.resp.relab,
+       file = 'Figures/Resubmission/FigS4/241223_respiration.pdf',
+       width = 8, height = 8,
+       units = 'in', device = "pdf")
