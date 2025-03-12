@@ -1,5 +1,5 @@
-#Code to replicate Figure S5 results
-#updated Saturday, August 24th, 2024
+#Code to replicate Figure S6 results
+#updated Monday, December 23rd, 2024
 
 #setup----
 
@@ -18,8 +18,7 @@ set.seed(42)
 setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
 
 #participant metadata
-p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Participant metadata') %>% 
+p.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet1_filt_v2.csv') %>% 
   as.data.frame()
 row.names(p.meta) <- p.meta$Sample
 samples <- row.names(p.meta)
@@ -28,8 +27,9 @@ samples <- row.names(p.meta)
 
 #format raw MetaPhlAn4 output for phyloseq
 #load data frame
-m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
-                     skip = 1) %>% as.data.frame()
+m4.raw <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet3_filt.csv',
+                   check.names = F) %>% 
+  as.data.frame()
 row.names(m4.raw) <- m4.raw$clade_name
 m4.raw$clade_name <- NULL
 
@@ -78,12 +78,12 @@ ecoli.col <- ecoli.col.df$Sample
 #virulence factor analysis----
 
 ##load VF metadata mapping file
-vf.map <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
+vf.map <- read_excel('ExtendedData/First_submission/240822_BioSigs_extended_data_file4.xlsx',
                      sheet = 'VF mapping file') %>% as.data.frame()
 
 ##load output and join with metadata
-vf.out <- read_excel('ExtendedData/240822_BioSigs_extended_data_file4.xlsx',
-                     sheet = 'shortBRED VF') %>% as.data.frame() %>% 
+vf.out <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file4_sheet5_filt.csv') %>%
+  as.data.frame() %>% 
   dplyr::rename(vfdb_call = Family) %>% 
   left_join(vf.map)
 
@@ -117,10 +117,10 @@ vf.wide.meta$Sample <- row.names(vf.wide.meta)
 vf.wide.meta <- left_join(p.meta, vf.wide.meta, by = 'Sample')
 
 ##test whether VF alpha diversity metrics are normally distributed before testing
-shapiro.test(vf.wide.meta$RPKM) #p = 1.361e-13, non-normal
-shapiro.test(vf.wide.meta$Richness) #p = 0.009, non-normal
+shapiro.test(vf.wide.meta$RPKM) #p = 2.171e-13, non-normal
+shapiro.test(vf.wide.meta$Richness) #p = 0.006, non-normal
 
-#p = 0.008, significant
+#p = 0.066, insignificant
 p.vf.rpkm <- vf.wide.meta %>%
   filter((E_coli_SBI == 'Y' & Colonized_final == 'yes') |
            (Group == 'Control' & Sample %in% ecoli.col)) %>% 
@@ -142,7 +142,7 @@ p.vf.rpkm <- vf.wide.meta %>%
         aspect.ratio = 1.8) +
   labs(y = 'VF RPKM')
 
-#p = 3.300e-4, significant
+#p = 0.053, insignificant
 p.vf.richness <- vf.wide.meta %>% 
   filter((E_coli_SBI == 'Y' & Colonized_final == 'yes') |
            (Group == 'Control' & Sample %in% ecoli.col)) %>% 
@@ -163,3 +163,10 @@ p.vf.richness <- vf.wide.meta %>%
         strip.text.x = element_text(size=15),
         aspect.ratio = 1.8) +
   labs(y = 'VF Richness')
+
+ggsave(ggarrange(p.vf.richness,
+                 p.vf.rpkm),
+       file = 'Figures/Resubmission/FigS6/241223_vf_richness_rpkm.pdf',
+       width = 6, height = 4,
+       units = 'in', device = "pdf")
+
