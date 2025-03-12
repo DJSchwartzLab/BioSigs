@@ -1,5 +1,5 @@
 #Code to replicate Figure 3 results
-#updated Friday, August 23rd, 2024
+#updated Monday, December 23rd, 2024
 
 #setup----
 
@@ -15,6 +15,7 @@ library(tidyr)
 library(ggbeeswarm)
 library(ape)
 library(ggExtra)
+library(Maaslin2)
 
 set.seed(42)
 
@@ -22,15 +23,13 @@ set.seed(42)
 setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
 
 #participant metadata
-p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Participant metadata') %>% 
+p.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet1_filt_v2.csv') %>% 
   as.data.frame()
 row.names(p.meta) <- p.meta$Sample
 samples <- row.names(p.meta)
 
 #metagenome metadata
-m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Metagenome metadata') %>% 
+m.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet2_filt.csv') %>% 
   as.data.frame()
 row.names(m.meta) <- m.meta$Sample
 
@@ -38,8 +37,9 @@ row.names(m.meta) <- m.meta$Sample
 
 #format raw MetaPhlAn4 output for phyloseq
 #load data frame
-m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
-                     skip = 1) %>% as.data.frame()
+m4.raw <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet3_filt.csv',
+                   check.names = F) %>% 
+  as.data.frame()
 row.names(m4.raw) <- m4.raw$clade_name
 m4.raw$clade_name <- NULL
 
@@ -125,6 +125,11 @@ p.adiv <- ps.df.a %>%
         aspect.ratio = 1.8) +
   labs(y = 'Taxa (MetaPhlAn4)')
 
+ggsave(p.adiv,
+       file = 'Figures/Resubmission/Fig3/241223_alpha_div.pdf',
+       width = 8, height = 4,
+       units = 'in', device = "pdf")
+
 ###beta diversity----
 
 ##compute bray-curtis dissimilarity scores
@@ -144,7 +149,7 @@ row.names(ps.spp.meta) <- ps.spp.meta$Sample
 
 ##run PERMANOVA with Adonis2
 adonis2(ps.spp.bray ~ Group, data = ps.spp.meta,
-        permutations = 9999, method = 'bray') # p = 0.46, no difference between cases and controls
+        permutations = 9999, method = 'bray') # p = 0.36, no difference between cases and controls
 
 ##plot pcoa
 p.bdiv <- ggMarginal((ps.spp.meta %>% 
@@ -160,36 +165,41 @@ p.bdiv <- ggMarginal((ps.spp.meta %>%
                               axis.text.x = element_text(size=12, angle=45, hjust=1),
                               strip.text.x = element_text(size=15),
                               aspect.ratio = 1) +
-                        labs(x = 'Axis 1 (5.8%)', y = 'Axis 2(5.5%)')),
+                        labs(x = 'Axis 1 (11.7%)', y = 'Axis 2 (10.4%)')),
                      type = 'boxplot', groupColour = T)
+
+ggsave(p.bdiv,
+       file = 'Figures/Resubmission/Fig3/241223_beta_div.pdf',
+       width = 5, height = 4,
+       units = 'in', device = "pdf")
 
 ##test for differences by axis (Mann-Whitney U test)
 wilcox.test(Axis.1 ~ Group,
             data = ps.spp.meta,
-            na.rm = TRUE, paired = FALSE, exact = FALSE, conf.int = TRUE) # p = 0.64
+            na.rm = TRUE, paired = FALSE, exact = FALSE, conf.int = TRUE) # p = 0.56
 wilcox.test(Axis.2 ~ Group,
             data = ps.spp.meta,
-            na.rm = TRUE, paired = FALSE, exact = FALSE, conf.int = TRUE) # p = 0.38
+            na.rm = TRUE, paired = FALSE, exact = FALSE, conf.int = TRUE) # p = 0.45
 
 ###test for taxonomic associations between groups----
 
 ##all case v control
 Maaslin2(input_data = ps.spp.df.wide,
          input_metadata = m.meta,
-         output = "Metagenomics/MetaPhlAn4/MaAsLin2/Case_v_control/Species_FINAL",
+         output = "/Users/annadeveaux/Box Sync/BioSigPediatricSepsis/Metagenomics/MetaPhlAn4/MaAsLin2/Case_v_control/Species_filtered",
          fixed_effects = 'Group',
          random_effects = 'Sample_Type',
-         reference = 'Group, Control')
+         reference = 'Group,Control')
 
 ##e coli sbi vs. control
 Maaslin2(input_data = ps.spp.df.wide,
          input_metadata = filter(m.meta, Participant_ID %in%
                                    (filter(p.meta,
                                            E_coli_SBI == 'Y' | Group == 'Control'))$Participant_ID),
-         output = "Metagenomics/MetaPhlAn4/MaAsLin2/Ecoli_SBI_v_control/Species_FINAL",
+         output = "/Users/annadeveaux/Box Sync/BioSigPediatricSepsis/Metagenomics/MetaPhlAn4/MaAsLin2/Ecoli_SBI_v_control/Species_filtered",
          fixed_effects = 'Group',
          random_effects = 'Sample_Type',
-         reference = 'Group, Control')
+         reference = 'Group,Control')
 
 ##e faecalis UTI vs control
 Maaslin2(input_data = ps.spp.df.wide,
@@ -207,10 +217,10 @@ Maaslin2(input_data = ps.spp.df.wide,
          input_metadata = filter(m.meta, Participant_ID %in%
                                    (filter(p.meta,
                                            GBS_UTI == 'Y' | Group == 'Control'))$Participant_ID),
-         output = "Metagenomics/MetaPhlAn4/MaAsLin2/GBS_UTI_v_control/Species_FINAL",
+         output = "/Users/annadeveaux/Box Sync/BioSigPediatricSepsis/Metagenomics/MetaPhlAn4/MaAsLin2/GBS_UTI_v_control/Species_FINAL",
          fixed_effects = 'Group',
          random_effects = 'Sample_Type',
-         reference = 'Group, Control',
+         reference = 'Group,Control',
          min_prevalence = 0.01)
 
 ##plot e coli relative abundance b/w SBI cases and controls
@@ -237,6 +247,11 @@ p.ecoli.sbi.maaslin <- ps.spp.df %>%
         aspect.ratio = 1.8) +
   labs(y = 'E. coli relative abundance (%)')
 
+ggsave(p.ecoli.sbi.maaslin,
+       file = 'Figures/Resubmission/Fig3/241223_ecoli_relab.pdf',
+       width = 4, height = 4,
+       units = 'in', device = "pdf")
+
 ##compare prevalence of E. coli in infants with E. coli SBIs vs. controls
 ##based on metaphlan4 (not strain-level) data
 e.coli.prev <- ps.spp.df %>%
@@ -244,7 +259,7 @@ e.coli.prev <- ps.spp.df %>%
   group_by(E_coli_SBI == 'Y') %>% dplyr::count(Abundance > 0)
 
 ##manually entering numbers found above into matrix
-e.coli.prev.matrix <- matrix(c(27, 0, 52, 28), nrow = 2, byrow = TRUE)
+e.coli.prev.matrix <- matrix(c(27, 0, 49, 25), nrow = 2, byrow = TRUE)
 
 rownames(e.coli.prev.matrix) <- c("E. coli SBI cases", "Controls")
 colnames(e.coli.prev.matrix) <- c("Colonized", "Not Colonized")
@@ -252,7 +267,7 @@ colnames(e.coli.prev.matrix) <- c("Colonized", "Not Colonized")
 #check that all looks well
 e.coli.prev.matrix
 
-#p-value = 8.434e-05
+#p-value = 1.524e-4
 fisher.test(e.coli.prev.matrix)
 
 ##test age vs. E coli relative abundance for E coli SBI cases (matches visualized) vs controls
@@ -288,4 +303,7 @@ p.lm.ecoli <- ps.spp.df.ecoli.dol %>%
   scale_y_continuous(trans = scales::pseudo_log_trans(base = 10),
                      breaks = c(0, 10, 100, 1000, 10000, 100000))
 
-
+ggsave(p.lm.ecoli,
+       file = 'Figures/Resubmission/Fig3/241223_ecoli_relab_dol.pdf',
+       width = 7, height = 6,
+       units = 'in', device = "pdf")
