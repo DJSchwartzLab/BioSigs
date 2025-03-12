@@ -1,5 +1,5 @@
 #Code to replicate Figure 2 results
-#updated Friday, August 23rd, 2024
+#updated Monday, December 23rd, 2024
 
 #setup----
 
@@ -18,23 +18,19 @@ set.seed(42)
 setwd('/Users/annadeveaux/Box Sync/2024_AnnaDrew_BioSigsOmics/')
 
 #participant metadata
-p.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Participant metadata') %>% 
+p.meta <- read_excel('ExtendedData/Resubmission/250107_BioSigs_extended_data_file1_v4.xlsx',
+                     sheet = "Participant metadata") %>% 
   as.data.frame()
 row.names(p.meta) <- p.meta$Sample
 samples <- row.names(p.meta)
 
 #isolate metadata
-i.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = "Isolate metadata") %>% 
-  merge(select(p.meta, c(Participant_ID, Sample)), by = 'Participant_ID') %>% 
-  as.data.frame()
+i.meta <- read.csv('ExtendedData/Resubmission/250107_BioSigs_extended_data_file1_v4.csv')
 row.names(i.meta) <- i.meta$Sample_ID
 isolates <- row.names(i.meta)
 
 #metagenome metadata
-m.meta <- read_excel('ExtendedData/240822_BioSigs_extended_data_file1.xlsx',
-                     sheet = 'Metagenome metadata') %>% 
+m.meta <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file1_sheet2_filt.csv') %>% 
   as.data.frame()
 row.names(m.meta) <- m.meta$Sample
 
@@ -42,8 +38,9 @@ row.names(m.meta) <- m.meta$Sample
 
 #format raw MetaPhlAn4 output for phyloseq
 #load data frame
-m4.raw <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx', sheet = 'MetaPhlAn4',
-                     skip = 1) %>% as.data.frame()
+m4.raw <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet3_filt.csv',
+                  check.names = F) %>% 
+  as.data.frame()
 row.names(m4.raw) <- m4.raw$clade_name
 m4.raw$clade_name <- NULL
 
@@ -88,12 +85,15 @@ ps.spp.df.wide$Sample <- NULL
 ##prep data----
 
 #load genome map
-g.map <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx',
-                    sheet = 'inStrain profile') %>% as.data.frame()
+g.map <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet1_filt.csv') %>%
+  as.data.frame() %>%
+  left_join(select(dplyr::rename(i.meta,
+                                 genome = Sample_ID), c(genome, Primary_isolate))) %>% 
+  filter(Primary_isolate == 1)
 
 g.map.edited <- g.map %>% 
   select(c('metagenome', 'genome', 'coverage', 'breadth', 'length',
-           'popANI_reference', 'SNS_count', 'SNV_count')) %>% 
+           'popANI_reference', 'SNS_count', 'SNV_count', 'Primary_isolate')) %>% 
   left_join(select(dplyr::rename(m.meta, metagenome = Sample),
                    c(Participant_ID, Group, metagenome)), by = 'metagenome') %>% 
   dplyr::rename(meta_ID = Participant_ID,
@@ -129,8 +129,8 @@ culture_match <- unique((filter(g.map.edited, culture_match == "TRUE"))$genome_I
 matches <- unique(c(is_match, culture_match))
 
 #load metagenomic read depth table
-read.depth <- read_excel('ExtendedData/240822_BioSigs_extended_data_file3.xlsx',
-                         sheet = 'read counts') %>% as.data.frame() %>% 
+read.depth <- read.csv('ExtendedData/Resubmission/filtered_data/241217_extended_data_file3_sheet2_filt.csv') %>%
+  as.data.frame() %>% 
   dplyr::rename(metagenome = Sample)
 
 #update genome map table with normalized coverage and metagenome groupings
@@ -160,7 +160,7 @@ g.map.edited.2 <- g.map.edited %>%
 
 ##plot metagenomic read mapping to extraintestinal isolate results (breadth vs. popANI)
 p.is.all <- g.map.edited.2 %>% 
-  filter(genome_sample_type != 'Intestinal' & breadth >= 0.5) %>% 
+  filter(breadth >= 0.5) %>% 
   arrange(same_infant, culture_match) %>% 
   ggplot(aes(x = logbreadth, y = logpopANI)) +
   geom_point(aes(color = fig2a_group,
@@ -174,6 +174,12 @@ p.is.all <- g.map.edited.2 %>%
   labs(x = "-Log(1-Breadth)", y = "-Log(1-populationANI)") +
   geom_hline(yintercept = 5, linetype = 'dotted', col = 'red') +
   theme(aspect.ratio = 1)
+
+ggsave(plot = p.is.all,
+       file = 'Figures/Resubmission/Fig2/250107_breadth_popANI.pdf',
+       height = 6, width = 6,
+       units = 'in', device = "pdf")
+
 
 ##plot
 p.relab.cov <- g.map.edited.2 %>%
@@ -195,16 +201,31 @@ p.relab.cov <- g.map.edited.2 %>%
   scale_fill_manual(values = c('grey', '#566573', 'white')) +
   theme(aspect.ratio = 1)
 
+ggsave(plot = p.relab.cov,
+       file = 'Figures/Resubmission/Fig2/250107_relab_cov.pdf',
+       height = 5.5, width = 5.5,
+       units = 'in', device = "pdf")
+
 
 ##assess differences in breadth of coverage between colonized groupings (default two-sided)
-##p = 4.604e-05
+g.map.edited.2 %>%
+  filter(same_infant == 'TRUE' & genome_ID %in% matches) %>%
+  group_by(is_match) %>%
+  dplyr::summarise(median(breadth))
+
+##p = 0.0001547
 wilcox.test(x = (filter(g.map.edited.2, (match == 'is_only' | match == 'both') &
                           genome_sample_type == 'Extraintestinal'))$breadth,
             y = (filter(g.map.edited.2, (match == 'culture_only') &
                           genome_sample_type == 'Extraintestinal'))$breadth)
 
 ##assess differences in sp relative abundance between colonized groupings (default two-sided)
-##p = 4.564-05
+g.map.edited.2 %>%
+  filter(same_infant == 'TRUE' & genome_ID %in% matches) %>%
+  group_by(is_match) %>%
+  dplyr::summarise(median(genome_relab))
+
+##p = 0.0001547
 wilcox.test(x = (filter(g.map.edited.2, (match == 'is_only' | match == 'both') &
                           genome_sample_type == 'Extraintestinal'))$genome_relab,
             y = (filter(g.map.edited.2, (match == 'culture_only') &
